@@ -14,15 +14,38 @@ class _Status:
         self.line_index = 0
         self.lines = lines
 
+        # page variable
+        self.start_line: int
+        self.end_line: int
+
+        # metrics
+        self.correct = 0
+        self.ignore = 0
+
+    def update_correct(self) -> None:
+        """increment correct count"""
+
+        if self.ignore:
+            self.ignore -= 1
+        else:
+            self.correct += 1
+
     def end(self) -> bool:
         """return true if reached the end"""
 
-        return self.line_num == len(self.lines) and self.line_index == len(
-            self.lines[-1]
+        end_file = (self.line_num == len(self.lines) - 1) and (
+            self.line_index == len(self.lines[-1])
         )
+        end_page = (self.line_num == self.end_line) and (self.line_index == 0)
+        # uc.mvaddstr(
+        #     0,
+        #     0,
+        #     f"{self.line_num} {self.end_line}, {self.line_index}",
+        # )
+        return end_page or end_file
 
     def current(self) -> str:
-        """return current letter"""
+        """return current letter as in the source file"""
 
         if self.line_index < len(self.lines[self.line_num]):
             return self.lines[self.line_num][self.line_index]
@@ -47,48 +70,34 @@ class _Status:
             self.line_num -= 1
             self.line_index = len(self.lines[self.line_num])
 
-    def normal(self) -> None:
+    def normal(self, cursor) -> None:
         """mark letter as normal"""
 
+        if self.current() == " ":
+            uc.mvaddstr(self.line_num - self.start_line, self.line_index, " ")
+
         uc.mvchgat(
-            self.line_num,
+            self.line_num - self.start_line,
             self.line_index,
             1,
             uc.A_NORMAL,
-            uc.COLOR_WHITE,
+            uc.COLOR_WHITE if not cursor else 3,
         )
 
-    def green(self) -> None:
+    def mark(self, success) -> None:
         """mark letter as green"""
 
+        if self.current() == " ":
+            uc.mvaddstr(self.line_num - self.start_line, self.line_index, "·")
+
+        word, new_line = (2, 20) if success else (1, 10)
+
         uc.mvchgat(
-            self.line_num,
+            self.line_num - self.start_line,
             self.line_index,
             1,
             uc.A_ITALIC,
-            2 if self.line_index < len(self.lines[self.line_num]) else 20,
-        )
-
-    def red(self) -> None:
-        """mark letter red"""
-
-        uc.mvchgat(
-            self.line_num,
-            self.line_index,
-            1,
-            uc.A_ITALIC,
-            1 if self.line_index < len(self.lines[self.line_num]) else 10,
-        )
-
-    def white(self) -> None:
-        """mark letter white"""
-
-        uc.mvchgat(
-            self.line_num,
-            self.line_index,
-            1,
-            uc.A_NORMAL,
-            3,
+            word if self.line_index < len(self.lines[self.line_num]) else new_line,
         )
 
 
@@ -101,21 +110,35 @@ create an asyncronous timer to count the number of letters covered
 def _printer(status: _Status) -> None:
     """function that handles the printing operation"""
 
-    for i in range(min(uc.getmaxx(uc.stdscr), len(status.lines)) - 1):
-        uc.mvaddstr(i, 0, status.lines[i])
+    status.start_line = 0
+    status.end_line = min(uc.getmaxy(uc.stdscr), len(status.lines))
 
-    status.white()
-    while not status.end() and (button := uc.getkey()) != "^[":
-        if button == status.current():
-            status.green()
-            status.next()
-        elif button != "KEY_BACKSPACE":
-            status.red()
-            status.next()
-        else:
-            status.normal()
-            status.previous()
-        status.white()
+    button = ""
+    while status.end_line > status.start_line and button != "^[":
+        uc.clear()
+        for i in range(status.start_line, status.end_line):
+            uc.mvaddstr(i - status.start_line, 0, status.lines[i])
+
+        status.normal(True)
+        while not status.end() and (button := uc.getkey()) != "^[":
+            if button == status.current():
+                status.update_correct()
+                status.mark(True)
+                status.next()
+            elif button != "KEY_BACKSPACE":
+                status.mark(False)
+                status.next()
+            else:
+                status.ignore += 1
+                status.normal(False)
+                status.previous()
+            status.normal(True)
+
+        # update lines
+        status.start_line = status.end_line
+        status.end_line = min(
+            uc.getmaxy(uc.stdscr) + status.end_line, len(status.lines)
+        )
 
 
 def game(stdscr: ctypes.c_void_p, path: str) -> None:
@@ -128,8 +151,6 @@ def game(stdscr: ctypes.c_void_p, path: str) -> None:
     uc.keypad(uc.stdscr, True)
     uc.curs_set(0)
     uc.leaveok(uc.stdscr, True)
-
-    # uc.use_default_colors()
 
     with open(path, "r", encoding="UTF-8") as file:
         lines = [re.sub(r"\s*$", "", line) for line in file.readlines()]
@@ -152,7 +173,6 @@ def game(stdscr: ctypes.c_void_p, path: str) -> None:
         )
 
     uc.getkey()
-    uc.clear()
 
     _printer(status)
 
