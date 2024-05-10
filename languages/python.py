@@ -1,1 +1,1 @@
-# TODO: indent automatically after: and add tabbing
+tab_size = 4

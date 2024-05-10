@@ -3,16 +3,20 @@
 import argparse
 import ctypes
 import re
+import os
+import time
 import unicurses as uc  # type: ignore
 from pyle_manager import file_manager
-import languages
+from languages import format_config
 
 
 class _Status:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(self, lines: list[str], path: str) -> None:
         self.line_num = 0
         self.line_index = 0
         self.lines = lines
+
+        self.language = format_config(path)
 
         # page variable
         self.start_line: int
@@ -21,6 +25,7 @@ class _Status:
         # metrics
         self.correct = 0
         self.ignore = 0
+        self.wrong = 0
 
     def update_correct(self) -> None:
         """increment correct count"""
@@ -30,6 +35,14 @@ class _Status:
         else:
             self.correct += 1
 
+    def update_wrong(self) -> None:
+        """increment wrong count"""
+
+        if self.ignore:
+            self.ignore -= 1
+        else:
+            self.wrong += 1
+
     def end(self) -> bool:
         """return true if reached the end"""
 
@@ -37,11 +50,7 @@ class _Status:
             self.line_index == len(self.lines[-1])
         )
         end_page = (self.line_num == self.end_line) and (self.line_index == 0)
-        # uc.mvaddstr(
-        #     0,
-        #     0,
-        #     f"{self.line_num} {self.end_line}, {self.line_index}",
-        # )
+
         return end_page or end_file
 
     def current(self) -> str:
@@ -66,9 +75,11 @@ class _Status:
 
         if self.line_index > 0:
             self.line_index -= 1
-        elif self.line_num > 0:
+            self.ignore += 1
+        elif self.line_num > self.start_line:
             self.line_num -= 1
             self.line_index = len(self.lines[self.line_num])
+            self.ignore += 1
 
     def normal(self, cursor) -> None:
         """mark letter as normal"""
@@ -101,19 +112,14 @@ class _Status:
         )
 
 
-def _timer() -> None:
-    raise NotImplementedError("""
-create an asyncronous timer to count the number of letters covered
-""")
-
-
 def _printer(status: _Status) -> None:
     """function that handles the printing operation"""
 
     status.start_line = 0
     status.end_line = min(uc.getmaxy(uc.stdscr), len(status.lines))
-
     button = ""
+
+    start = time.time()
     while status.end_line > status.start_line and button != "^[":
         uc.clear()
         for i in range(status.start_line, status.end_line):
@@ -125,13 +131,16 @@ def _printer(status: _Status) -> None:
                 status.update_correct()
                 status.mark(True)
                 status.next()
-            elif button != "KEY_BACKSPACE":
-                status.mark(False)
-                status.next()
-            else:
-                status.ignore += 1
+            elif button == "KEY_BACKSPACE":
                 status.normal(False)
                 status.previous()
+            elif button == "^I":
+                for _ in range(4):
+                    uc.ungetch(" ")
+            else:
+                status.update_wrong()
+                status.mark(False)
+                status.next()
             status.normal(True)
 
         # update lines
@@ -139,6 +148,23 @@ def _printer(status: _Status) -> None:
         status.end_line = min(
             uc.getmaxy(uc.stdscr) + status.end_line, len(status.lines)
         )
+    end = time.time()
+
+    minutes = 5 * (end - start) / 60
+    wpm = (status.correct + status.wrong) / minutes
+
+    uc.clear()
+
+    if status.correct + status.wrong == 0:
+        uc.mvaddstr(0, 0, "You didn't even try...")
+        uc.getkey()
+        return
+
+    accuracy = status.correct / (status.correct + status.wrong)
+    uc.mvaddstr(0, 0, f"Accuracy: {accuracy:.2%}")
+    uc.mvaddstr(1, 0, f"Speed: {wpm:.2f} wpm.")
+
+    uc.getkey()
 
 
 def game(stdscr: ctypes.c_void_p, path: str) -> None:
@@ -155,7 +181,7 @@ def game(stdscr: ctypes.c_void_p, path: str) -> None:
     with open(path, "r", encoding="UTF-8") as file:
         lines = [re.sub(r"\s*$", "", line) for line in file.readlines()]
 
-    status = _Status(lines)
+    status = _Status(lines, path)
 
     uc.mvaddstr(0, 0, "Press a button when you are ready to start!")
 
@@ -188,4 +214,8 @@ if __name__ == "__main__":
     # get path if not command line
     PATH = ARGS.commandline if ARGS.commandline else file_manager(picker=True)
 
-    uc.wrapper(game, PATH)
+    if os.path.isfile(PATH):
+        uc.wrapper(game, PATH)
+    else:
+        print(PATH)
+        print("Is not a text file!")
