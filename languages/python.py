@@ -1,1 +1,1 @@
-tab_size = 4
+rules = {"extension": ".py", "tab_size": 4}
